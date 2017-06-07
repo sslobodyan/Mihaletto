@@ -5,15 +5,16 @@ Arduino UNO & MotorMonster shield
 2017
 */
 
-#define VERSION 0.13
+#define VERSION 0.14
 //#define TEST_DRIVE  // раскомментировать эту строку для включения тестдрайва
-
+//#define DEBUG_DELTA // раскомментировать эту строку для отладки подруливания на прямой 
 
 #define LED 13
-#define DEBUG Serial1  // на какой порт пойдет отладка команд
+#define DEBUG Serial  // на какой порт пойдет отладка команд
 #define SPEED 30 // скорость движения от 1 до 255, 0-всегда стоим
 #define PERCENT_SPEED 12 // на сколько процентов ускорять/подтормаживать колесо при движении вперед для подруливания
 #define KOEF_DELTA 0.1f // надо подобрать по факту 
+#define TIME_CROSS_LED 500 // милисекунд горения светодиода найденого перекрестка
 
 /* режимы движения робота */
 #define FORWARD 0
@@ -54,8 +55,8 @@ byte state; // текущий режим движения
 byte test_mode;
 
 int cross_cnt=0; // счетчик перекрестков
-uint32_t time_led=0; // время горения светодиода наличия перекрестка
-
+uint32_t time_cross=0; // время горения светодиода наличия перекрестка и "слепое время"
+bool cross=false; // наехали на перекресток - центр на полосе и крайние боковые не менее 0.9 от центра
 
 /* Прототипы функций */
 void motorStop(); 
@@ -67,6 +68,7 @@ void motor(uint8_t mtr, uint8_t mode, uint8_t spd);
 void get_sensors();
 void autopilote();
 void show_state();
+void test_on_cross();
 
 ///////////////////////////////////////////////////////////////////////
 
@@ -202,6 +204,7 @@ void get_sensors()
 		sensor[CENTER] = BLACK;
 		sensor[CENTER-2] = WHITE;
 		sensor[CENTER+2] = WHITE;
+		test_on_cross();
 	} else  { // линия резко свернула - поворот показываем самыми крайними
 		sensor[CENTER] = WHITE;
 		if ( analog[CENTER-1] > analog[CENTER+1] ) {
@@ -257,11 +260,17 @@ void autopilote()
 		float f = (float) KOEF_DELTA * abs(err);
 		f = constrain( f, 0, max_delta_speed);
 		if (err < 0) { // справа темнее 
-			Delta = -f; // доворот вправо
+			Delta = f; // доворот вправо
 		}
 		else {
-			Delta = f; // доворот влево или прекратить
+			Delta = -f; // доворот влево или прекратить
 		}
+
+#ifdef DEBUG_DELTA
+		DEBUG.print("Delta="); DEBUG.print(Delta);
+		DEBUG.print(" Left="); DEBUG.print(SPEED+Delta);
+		DEBUG.print(" Right="); DEBUG.println(SPEED-Delta);
+#endif
 
     motorFORWARD(); // идем прямо
     line_state = "On line ";
@@ -326,6 +335,25 @@ void show_state()
   }
 }
 
+void test_on_cross() {
+// поиск перекрестка
+	if ( time_cross ) return; // идет слепое время
+	if ( (analog[CENTER-2] >= (float) 0.9*analog[CENTER]) && (analog[CENTER+2] >= (float) 0.9*analog[CENTER]) ) {
+		if ( !cross ) { // еще не были на перекрестке
+			cross = true;
+			time_cross = millis() + TIME_CROSS_LED;
+			digitalWrite( LED, HIGH );
+			DEBUG.println("Cross start");
+		} 
+	} else {
+		if ( cross ) { // съезжаем с перекрестка
+			cross = false;
+			cross_cnt += 1;
+			DEBUG.print("Cross finish"); DEBUG.print(" > CROSS_CNT="); DEBUG.println( cross_cnt );
+		}
+	}
+}
+
 ////////////////////////////////////////////////////////////////////
 
 
@@ -345,4 +373,10 @@ void loop()
     show_state();
   }
 
+	if ( time_cross ) {
+		if ( millis() > time_cross ) {
+			time_cross = 0;
+			digitalWrite ( LED, LOW );
+		}
+	}
 }

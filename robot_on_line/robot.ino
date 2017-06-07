@@ -1,0 +1,348 @@
+/*  
+Робот, движущийся по линии
+Arduino UNO & MotorMonster shield
+(c) sslobodyan@ya.ru for Mihaletto
+2017
+*/
+
+#define VERSION 0.13
+//#define TEST_DRIVE  // раскомментировать эту строку для включения тестдрайва
+
+
+#define LED 13
+#define DEBUG Serial1  // на какой порт пойдет отладка команд
+#define SPEED 30 // скорость движения от 1 до 255, 0-всегда стоим
+#define PERCENT_SPEED 12 // на сколько процентов ускорять/подтормаживать колесо при движении вперед для подруливания
+#define KOEF_DELTA 0.1f // надо подобрать по факту 
+
+/* режимы движения робота */
+#define FORWARD 0
+#define TURN_LEFT 1
+#define TURN_RIGHT 2
+#define STOP 3
+#define Backward 4
+
+#define BRAKEVCC 0
+#define CW   1
+#define CCW  2
+#define BRAKEGND 3
+
+#define LEFT 0 // левый мотор
+#define RIGHT 1 // правый мотор
+
+#define WHITE 0 // белое поле
+#define BLACK 1 // черная линия
+
+/* Определение подключения пинов моторшилда: сначала ЛЕВЫЙ, затем ПРАВЫЙ мотор */
+int inApin[2] = {7, 4}; // INA: по часовой
+int inBpin[2] = {8, 9}; // INB: против часовой
+int pwmpin[2] = {5, 6}; // PWM: скорость
+
+String line_state;
+int Delta=0; // дифференциал скоростей колес. <0 доворот влево, >0 доворот вправо, 0=скорости одинаковые
+
+#define SENSOR_CNT 5
+#define CENTER 2 // центральный сенсор
+
+int sensorpin[SENSOR_CNT] = {A4, A3, A2, A1, A0}; // датчики линии СЛЕВА НАПРАВО если смотреть на робота СВЕРХУ
+int ledpin[SENSOR_CNT] = {2,3,10,11,12}; // светодиоды аналогично датчикам (0-А4, 1-А3 и т.д.)
+
+bool sensor[5]; // логические уровни с датчиков
+int analog[5]; // аналоговые уровни с датчиков
+
+byte state; // текущий режим движения
+byte test_mode;
+
+int cross_cnt=0; // счетчик перекрестков
+uint32_t time_led=0; // время горения светодиода наличия перекрестка
+
+
+/* Прототипы функций */
+void motorStop(); 
+void motorLeft();
+void motorRight();
+void motorBackward();
+void motorFORWARD();
+void motor(uint8_t mtr, uint8_t mode, uint8_t spd);
+void get_sensors();
+void autopilote();
+void show_state();
+
+///////////////////////////////////////////////////////////////////////
+
+void setup()
+{
+  DEBUG.begin(115200);
+  DEBUG.print("Robot  Version ");DEBUG.println(VERSION);
+  
+  pinMode(LED, OUTPUT);
+  digitalWrite(LED, LOW);
+  
+  // все управляющие на вывод
+  for (int i=0; i<2; i++)
+  {
+    pinMode(inApin[i], OUTPUT);
+    pinMode(inBpin[i], OUTPUT);
+    pinMode(pwmpin[i], OUTPUT);
+  }
+  
+  // все светодиоды на вывод и погасить
+  for (int i=0; i<SENSOR_CNT; i++)
+  {
+    pinMode(ledpin[i], OUTPUT);
+		digitalWrite(ledpin[i], WHITE);
+		sensor[i] = WHITE;
+  }
+
+  get_sensors();
+  motorStop();
+	show_state();
+  
+}
+
+void motorStop()
+/*
+  Остановка с блокированием к земле
+*/
+{
+  motor(LEFT, BRAKEGND, 0);
+  motor(RIGHT, BRAKEGND, 0);
+  state = STOP;
+	Delta = 0;
+}
+
+void motorFORWARD()
+/*
+  Двигаемся вперед
+*/
+{
+  motor(LEFT, CW, SPEED+Delta);
+  motor(RIGHT, CW, SPEED-Delta);
+  state = FORWARD;
+}
+
+void motorBackward()
+/*
+  Двигаемся назад
+*/
+{
+  motor(LEFT, CCW, SPEED);
+  motor(RIGHT, CCW, SPEED);
+  state = Backward;
+	Delta = 0;
+}
+
+void motorLeft()
+/*
+  Поворачиваем влево
+*/
+{
+  motor(LEFT, BRAKEGND, 0);
+  motor(RIGHT, CW, SPEED);
+  state = TURN_LEFT;
+	Delta = 0;
+}
+
+void motorRight()
+/*
+  Поворачиваем направо
+*/
+{
+  motor(LEFT, CW, SPEED);
+  motor(RIGHT, BRAKEGND, 0);
+  state = TURN_RIGHT;
+	Delta = 0;
+}
+
+
+void motor(uint8_t mtr, uint8_t mode, uint8_t spd)
+/* Управление отдельным мотором
+ mtr: номер мотора
+ mode: режим работы мотора
+     BRAKEVCC:  стоп к питанию
+     CW:        по часовой
+     CCW:       против часовой
+     BRAKEGND:  стоп к земле
+ spd: скорость 0-255
+*/
+{
+  if (mtr <= 1) {
+    switch (mode) {
+      case BRAKEVCC: 
+            digitalWrite(inApin[mtr], HIGH);
+            digitalWrite(inBpin[mtr], HIGH);
+            break;
+      case CW: 
+            digitalWrite(inApin[mtr], HIGH);
+            digitalWrite(inBpin[mtr], LOW);
+            break;
+      case CCW: 
+            digitalWrite(inApin[mtr], LOW);
+            digitalWrite(inBpin[mtr], HIGH);
+            break;
+      case BRAKEGND: 
+            digitalWrite(inApin[mtr], LOW);
+            digitalWrite(inBpin[mtr], LOW);
+            break;
+      default: ;      
+    }
+  }
+  analogWrite(pwmpin[mtr], spd);
+}
+
+void get_sensors() 
+/* что под датчиком - поле либо полоса */
+{
+  for (byte i=0; i<SENSOR_CNT; i++) {
+    analog[i] = analogRead( sensorpin[i] );
+  }
+
+	if ( (analog[CENTER] >= analog[CENTER-1]) && (analog[CENTER] >= analog[CENTER+1]) ) {
+		// центральный видит темнее полосу чем первые боковые - идем по линии
+		sensor[CENTER] = BLACK;
+		sensor[CENTER-2] = WHITE;
+		sensor[CENTER+2] = WHITE;
+	} else  { // линия резко свернула - поворот показываем самыми крайними
+		sensor[CENTER] = WHITE;
+		if ( analog[CENTER-1] > analog[CENTER+1] ) {
+			// первый левый видит темнее полосу чем первый правый - отклонились влево
+			sensor[CENTER-2] = BLACK;
+			sensor[CENTER+2] = WHITE;
+		}
+		if ( analog[CENTER-1] < analog[CENTER+1] ) {
+			sensor[CENTER+2] = BLACK;
+			sensor[CENTER-2] = WHITE;
+		}
+	}
+
+	sensor[CENTER-1] = WHITE;
+	sensor[CENTER+1] = WHITE;
+
+	if ( analog[CENTER-1] > analog[CENTER+1] ) {
+		// первый левый видит темнее полосу чем первый правый - отклонились влево
+		sensor[CENTER-1] = BLACK;
+	}
+	if ( analog[CENTER-1] < analog[CENTER+1] ) {
+		// первый правый видит темнее полосу чем первый левый - отклонились вправо
+		sensor[CENTER+1] = BLACK;
+	}
+
+  for (byte i=0; i<SENSOR_CNT; i++) {	
+		digitalWrite (ledpin[i], sensor[i]); // индицируем уровень с сенсора (светит - черная линия)
+	}
+}
+
+void test_drive() 
+/* тест движения */
+{
+	delay(1000);
+	switch (test_mode) {
+		case 0: motorFORWARD(); break;
+		case 1: motorRight(); break;
+		case 2: motorLeft(); break;
+		case 3: motorStop(); break;
+		case 4: motorBackward(); break;
+	}
+	if (test_mode) test_mode-=1;
+	else test_mode=4;
+}
+
+void autopilote() 
+/* автопилот движения по линии */
+{
+  if ( sensor[CENTER] == BLACK ) { // идем по полосе
+		// определяем дифференциал скоростей так, чтобы 1 и 3 датчики отдавали одинаковое значение, то есть идем точно по центру 
+		int err = analog[CENTER-1] - analog[CENTER+1];
+		const int max_delta_speed = (int) SPEED * PERCENT_SPEED / 100; // максимум процентов дифференциал
+		float f = (float) KOEF_DELTA * abs(err);
+		f = constrain( f, 0, max_delta_speed);
+		if (err < 0) { // справа темнее 
+			Delta = -f; // доворот вправо
+		}
+		else {
+			Delta = f; // доворот влево или прекратить
+		}
+
+    motorFORWARD(); // идем прямо
+    line_state = "On line ";
+  } 
+  else { // центральный датчик потерял полосу
+    // проверяем правый борт
+    for (byte i=CENTER+1; i<SENSOR_CNT; i++) {
+      if ( sensor[i] == BLACK ) {
+        motorRight(); // поворачиваем вправо
+        line_state = "Line on right ";
+        return ;
+      }
+    }
+    // проверяем левый борт
+    for (byte i=0; i<CENTER; i++) {
+      if ( sensor[i] == BLACK ) {
+        motorLeft(); // поворачиваем влево
+        line_state = "Line on left ";
+        return ;
+      }
+    }
+    // ни один датчик не видит полосу
+    motorStop();
+    line_state = "Line loose! ";
+  }
+}
+
+void show_state() 
+// отладка состояния сенсоров и направления движения
+{
+  DEBUG.print(" Sensors: ");
+  for (byte i=0; i<SENSOR_CNT; i++) {
+    DEBUG.print( analog[i] );
+    if ( sensor[i] == WHITE ) {
+      DEBUG.print( "(W)" );
+    }
+    else DEBUG.print( "(B)" );
+    DEBUG.print(" \t");
+  }
+  DEBUG.print(" > ");
+
+  DEBUG.print(line_state);  DEBUG.print(" > ");
+
+  
+  switch (state) {
+    case STOP:
+          DEBUG.println("Stop");
+          break;
+    case FORWARD:
+          DEBUG.println("VPERED");
+          break;
+    case TURN_LEFT:
+          DEBUG.println("VLEVO");
+          break;
+    case TURN_RIGHT:
+          DEBUG.println("VPRAVO");
+          break;
+    case Backward:
+          DEBUG.println("NAZAD");
+          break;
+    default: ;
+  }
+}
+
+////////////////////////////////////////////////////////////////////
+
+
+void loop()
+{
+
+  get_sensors();
+  byte old_state = state;
+  
+#ifdef TEST_DRIVE
+  test_drive();
+#else  
+  autopilote();
+#endif  
+
+  if ( old_state != state ) {
+    show_state();
+  }
+
+}

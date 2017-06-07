@@ -1,20 +1,24 @@
 /*  
 –обот, движущийс€ по линии
-Arduino UNO & MotorMonster shield
+Arduino MEGA2560-UNO & MotorMonster shield
 (c) sslobodyan@ya.ru for Mihaletto
 2017
 */
 
-#define VERSION 0.14
+#define VERSION 0.16
 //#define TEST_DRIVE  // раскомментировать эту строку дл€ включени€ тестдрайва
 //#define DEBUG_DELTA // раскомментировать эту строку дл€ отладки подруливани€ на пр€мой 
 
 #define LED 13
-#define DEBUG Serial  // на какой порт пойдет отладка команд
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+	#define DEBUG Serial1  // на какой порт пойдет отладка команд дл€ MEGA2560
+#else
+	#define DEBUG Serial  // на какой порт пойдет отладка команд дл€ UNO
+#endif
 #define SPEED 30 // скорость движени€ от 1 до 255, 0-всегда стоим
 #define PERCENT_SPEED 12 // на сколько процентов ускор€ть/подтормаживать колесо при движении вперед дл€ подруливани€
 #define KOEF_DELTA 0.1f // надо подобрать по факту 
-#define TIME_CROSS_LED 500 // милисекунд горени€ светодиода найденого перекрестка
+#define TIME_CROSS_LED 500 // милисекунд горени€ светодиода найденного перекрестка
 
 /* режимы движени€ робота */
 #define FORWARD 0
@@ -69,13 +73,19 @@ void get_sensors();
 void autopilote();
 void show_state();
 void test_on_cross();
+void setPwmFrequency(int pin, int divisor);
 
 ///////////////////////////////////////////////////////////////////////
 
 void setup()
 {
   DEBUG.begin(115200);
-  DEBUG.print("Robot  Version ");DEBUG.println(VERSION);
+
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+  DEBUG.print("Robot MEGA2560  Version ");DEBUG.println(VERSION);
+#else
+  DEBUG.print("Robot UNO  Version ");DEBUG.println(VERSION);
+#endif
   
   pinMode(LED, OUTPUT);
   digitalWrite(LED, LOW);
@@ -96,10 +106,21 @@ void setup()
 		sensor[i] = WHITE;
   }
 
+	DEBUG.print("Waiting "); 
+	for (byte i=0; i<30; i++) {
+		delay(100);
+		DEBUG.print(".");
+		digitalWrite( LED, i%2 );
+	}
+	DEBUG.println(" Let's GO !!!");
+	digitalWrite( LED, LOW );
+
   get_sensors();
   motorStop();
 	show_state();
-  
+	// установим частоту Ў»ћ дл€ выводов управлени€ скоростью 
+	setPwmFrequency(pwmpin[0], 8);  // 16000000 / 256 / 2 / 8 = 3,9KHz
+	setPwmFrequency(pwmpin[1], 8);  // стандартно стоит делитель 64 -> 490 √ц
 }
 
 void motorStop()
@@ -190,6 +211,54 @@ void motor(uint8_t mtr, uint8_t mode, uint8_t spd)
     }
   }
   analogWrite(pwmpin[mtr], spd);
+}
+
+void setPwmFrequency(int pin, int divisor) {
+/* устанавливаем частоту Ў»ћ на нужном пине, указыва€ делитель 1,8,64,256,1024 */
+  byte mode;
+  if(pin == 5 || pin == 6 || pin == 9 || pin == 10) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 64: mode = 0x03; break;
+      case 256: mode = 0x04; break;
+      case 1024: mode = 0x05; break;
+      default: return;
+    }
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+		switch (pin) {
+			case 5: TCCR3B = TCCR3B & 0b11111000 | mode; break;
+			case 6: TCCR4B = TCCR4B & 0b11111000 | mode; break;
+			case 9: ;
+			case 10: TCCR2B = TCCR2B & 0b11111000 | mode; break;
+		}
+#else
+    if(pin == 5 || pin == 6) {
+      TCCR0B = TCCR0B & 0b11111000 | mode;
+    } else {
+      TCCR1B = TCCR1B & 0b11111000 | mode;
+    }
+#endif
+  } else if(pin == 3 || pin == 11) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 32: mode = 0x03; break;
+      case 64: mode = 0x04; break;
+      case 128: mode = 0x05; break;
+      case 256: mode = 0x06; break;
+      case 1024: mode = 0x07; break;
+      default: return;
+    }
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+		switch (pin) {
+			case 3: TCCR3B = TCCR3B & 0b11111000 | mode; break;
+			case 11: TCCR1B = TCCR1B & 0b11111000 | mode; break;
+		}
+#else
+		TCCR2B = TCCR2B & 0b11111000 | mode; 
+#endif
+  }
 }
 
 void get_sensors() 

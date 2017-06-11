@@ -5,20 +5,35 @@ Arduino MEGA2560-UNO & MotorMonster shield
 2017
 */
 
-#define VERSION 0.16
+#define VERSION 0.17
 //#define TEST_DRIVE  // раскомментировать эту строку для включения тестдрайва
 //#define DEBUG_DELTA // раскомментировать эту строку для отладки подруливания на прямой 
 
-#define LED 13
-#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-	#define DEBUG Serial1  // на какой порт пойдет отладка команд для MEGA2560
-#else
-	#define DEBUG Serial  // на какой порт пойдет отладка команд для UNO
+#define SERIAL_DEBUG	// закоментировать для отключения вівода в сериал отладочной информации
+
+#if defined(SERIAL_DEBUG) // включить вывод отладки в нужный сериал
+	#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+		#define  DPRINT(...) Serial1.print(__VA_ARGS__)  // на какой порт пойдет отладка команд для MEGA2560
+		#define  DPRINTLN(...) Serial1.println(__VA_ARGS__)
+		#define  DBEGIN(...) Serial1.begin(__VA_ARGS__)
+	#else
+		#define  DPRINT(...) Serial.print(__VA_ARGS__)  // на какой порт пойдет отладка команд для UNO
+		#define  DPRINTLN(...) Serial.println(__VA_ARGS__)
+		#define  DBEGIN(...) Serial1.begin(__VA_ARGS__)
+	#endif
+#else // Отключаем вывод не нужной отладки в сериал
+	#define  DPRINT(...) //
+	#define  DPRINTLN(...) //
+	#define  DBEGIN(...) //
 #endif
+
+#define LED 13
+
 #define SPEED 30 // скорость движения от 1 до 255, 0-всегда стоим
-#define PERCENT_SPEED 12 // на сколько процентов ускорять/подтормаживать колесо при движении вперед для подруливания
+#define PERCENT_SPEED 12 // на сколько максимально процентов ускорять/подтормаживать колесо при движении вперед для подруливания
 #define KOEF_DELTA 0.1f // надо подобрать по факту 
 #define TIME_CROSS_LED 500 // милисекунд горения светодиода найденного перекрестка
+#define START_TIME 50 // 5 секунд (по 0.1сек) на установку робота на линию после включения
 
 /* режимы движения робота */
 #define FORWARD 0
@@ -79,12 +94,12 @@ void setPwmFrequency(int pin, int divisor);
 
 void setup()
 {
-  DEBUG.begin(115200);
+    DBEGIN(115200);
 
 #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-  DEBUG.print("Robot MEGA2560  Version ");DEBUG.println(VERSION);
+    DPRINT("Robot MEGA2560  Version ");  DPRINTLN(VERSION);
 #else
-  DEBUG.print("Robot UNO  Version ");DEBUG.println(VERSION);
+    DPRINT("Robot UNO  Version ");  DPRINTLN(VERSION);
 #endif
   
   pinMode(LED, OUTPUT);
@@ -106,13 +121,14 @@ void setup()
 		sensor[i] = WHITE;
   }
 
-	DEBUG.print("Waiting "); 
-	for (byte i=0; i<30; i++) {
+	DPRINT("Waiting "); 
+	for (byte i=0; i<START_TIME; i++) {
 		delay(100);
-		DEBUG.print(".");
+	  DPRINT(".");
+		get_sensors(); // показываем как датчики видят линию
 		digitalWrite( LED, i%2 );
 	}
-	DEBUG.println(" Let's GO !!!");
+	DPRINTLN(" Let's GO !!!");
 	digitalWrite( LED, LOW );
 
   get_sensors();
@@ -266,29 +282,22 @@ void get_sensors()
 {
   for (byte i=0; i<SENSOR_CNT; i++) {
     analog[i] = analogRead( sensorpin[i] );
+		sensor[i] = WHITE; // выключаем все светодиоды
   }
 
 	if ( (analog[CENTER] >= analog[CENTER-1]) && (analog[CENTER] >= analog[CENTER+1]) ) {
 		// центральный видит темнее полосу чем первые боковые - идем по линии
 		sensor[CENTER] = BLACK;
-		sensor[CENTER-2] = WHITE;
-		sensor[CENTER+2] = WHITE;
 		test_on_cross();
-	} else  { // линия резко свернула - поворот показываем самыми крайними
-		sensor[CENTER] = WHITE;
+	} else  { // линия резко свернула (центр увидел белое поле) - поворот показываем самыми крайними
 		if ( analog[CENTER-1] > analog[CENTER+1] ) {
 			// первый левый видит темнее полосу чем первый правый - отклонились влево
 			sensor[CENTER-2] = BLACK;
-			sensor[CENTER+2] = WHITE;
 		}
 		if ( analog[CENTER-1] < analog[CENTER+1] ) {
 			sensor[CENTER+2] = BLACK;
-			sensor[CENTER-2] = WHITE;
 		}
 	}
-
-	sensor[CENTER-1] = WHITE;
-	sensor[CENTER+1] = WHITE;
 
 	if ( analog[CENTER-1] > analog[CENTER+1] ) {
 		// первый левый видит темнее полосу чем первый правый - отклонились влево
@@ -335,10 +344,10 @@ void autopilote()
 			Delta = -f; // доворот влево или прекратить
 		}
 
-#ifdef DEBUG_DELTA
-		DEBUG.print("Delta="); DEBUG.print(Delta);
-		DEBUG.print(" Left="); DEBUG.print(SPEED+Delta);
-		DEBUG.print(" Right="); DEBUG.println(SPEED-Delta);
+#ifdef  DEBUG_DELTA
+		  DPRINT("Delta=");   DPRINT(Delta);
+		  DPRINT(" Left=");   DPRINT(SPEED+Delta);
+		  DPRINT(" Right=");   DPRINTLN(SPEED-Delta);
 #endif
 
     motorFORWARD(); // идем прямо
@@ -370,35 +379,32 @@ void autopilote()
 void show_state() 
 // отладка состояния сенсоров и направления движения
 {
-  DEBUG.print(" Sensors: ");
+  DPRINT(" Sensors: ");
   for (byte i=0; i<SENSOR_CNT; i++) {
-    DEBUG.print( analog[i] );
+    DPRINT( analog[i] );
     if ( sensor[i] == WHITE ) {
-      DEBUG.print( "(W)" );
+      DPRINT( "(W)" );
     }
-    else DEBUG.print( "(B)" );
-    DEBUG.print(" \t");
+    else DPRINT( "(B)" );
+    DPRINT(" \t");
   }
-  DEBUG.print(" > ");
+  DPRINT(" > "); DPRINT(line_state); DPRINT(" > ");
 
-  DEBUG.print(line_state);  DEBUG.print(" > ");
-
-  
   switch (state) {
     case STOP:
-          DEBUG.println("Stop");
+          DPRINTLN("Stop");
           break;
     case FORWARD:
-          DEBUG.println("VPERED");
+          DPRINTLN("VPERED");
           break;
     case TURN_LEFT:
-          DEBUG.println("VLEVO");
+          DPRINTLN("VLEVO");
           break;
     case TURN_RIGHT:
-          DEBUG.println("VPRAVO");
+          DPRINTLN("VPRAVO");
           break;
     case Backward:
-          DEBUG.println("NAZAD");
+          DPRINTLN("NAZAD");
           break;
     default: ;
   }
@@ -412,13 +418,13 @@ void test_on_cross() {
 			cross = true;
 			time_cross = millis() + TIME_CROSS_LED;
 			digitalWrite( LED, HIGH );
-			DEBUG.println("Cross start");
+ 	    DPRINTLN("Cross start");
 		} 
 	} else {
 		if ( cross ) { // съезжаем с перекрестка
 			cross = false;
 			cross_cnt += 1;
-			DEBUG.print("Cross finish"); DEBUG.print(" > CROSS_CNT="); DEBUG.println( cross_cnt );
+			DPRINT("Cross finish"); DPRINT(" > CROSS_CNT="); DPRINTLN( cross_cnt );
 		}
 	}
 }

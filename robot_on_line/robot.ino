@@ -1,15 +1,16 @@
 /*  
+GODEPAGE WIN-1251
 Робот, движущийся по линии
 Arduino MEGA2560-UNO & MotorMonster shield
 (c) sslobodyan@ya.ru for Mihaletto
 2017
 */
 
-#define VERSION 0.17
+#define VERSION 0.18
 //#define TEST_DRIVE  // раскомментировать эту строку для включения тестдрайва
 //#define DEBUG_DELTA // раскомментировать эту строку для отладки подруливания на прямой 
 
-#define SERIAL_DEBUG	// закоментировать для отключения вівода в сериал отладочной информации
+#define SERIAL_DEBUG	// закоментировать для отключения вывода в сериал отладочной информации
 
 #if defined(SERIAL_DEBUG) // включить вывод отладки в нужный сериал
 	#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
@@ -121,6 +122,13 @@ void setup()
 		sensor[i] = WHITE;
   }
 
+	// установим частоту ШИМ для выводов управления скоростью 
+	setPwmFrequency(pwmpin[0], 8);  // 16000000 / 256 / 2 / 8 = 3,9KHz
+	setPwmFrequency(pwmpin[1], 8);  // стандартно стоит делитель 64 -> 490 Гц
+
+  motorStop();
+	show_state();
+
 	DPRINT("Waiting "); 
 	for (byte i=0; i<START_TIME; i++) {
 		delay(100);
@@ -131,12 +139,6 @@ void setup()
 	DPRINTLN(" Let's GO !!!");
 	digitalWrite( LED, LOW );
 
-  get_sensors();
-  motorStop();
-	show_state();
-	// установим частоту ШИМ для выводов управления скоростью 
-	setPwmFrequency(pwmpin[0], 8);  // 16000000 / 256 / 2 / 8 = 3,9KHz
-	setPwmFrequency(pwmpin[1], 8);  // стандартно стоит делитель 64 -> 490 Гц
 }
 
 void motorStop()
